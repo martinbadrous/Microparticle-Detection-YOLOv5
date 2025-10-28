@@ -1,0 +1,8 @@
+opencv-python
+numpy
+matplotlib
+pandas
+scikit-image
+PyYAML
+tqdm
+torch>=1.8
