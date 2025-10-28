@@ -1,33 +1,86 @@
-import argparse, cv2 as cv, json
-import numpy as np
+"""Generate the reference histogram used for microparticle classification."""
 
-def hist_256(img_gray, normalize=True):
-    h = cv.calcHist([img_gray],[0],None,[256],[0,256]).flatten()
-    if normalize:
-        s = h.sum() + 1e-8
-        h = h / s
-    return h
+from __future__ import annotations
 
-def enhance_contrast_pointwise(img_gray, alpha=1.2, beta=0):
-    out = cv.convertScaleAbs(img_gray, alpha=alpha, beta=beta)
-    return out
+import argparse
+import json
+import logging
+from pathlib import Path
+import sys
+from typing import Iterable, Optional
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--crop", required=True, help="Path to an 'optimal' particle crop (in-focus)")
-    ap.add_argument("--out", default="reference_hist.json")
-    ap.add_argument("--alpha", type=float, default=1.2)
-    args = ap.parse_args()
+import cv2 as cv
 
-    img = cv.imread(args.crop, cv.IMREAD_GRAYSCALE)
-    if img is None:
-        raise FileNotFoundError(args.crop)
-    img = enhance_contrast_pointwise(img, alpha=args.alpha)
-    h = hist_256(img, normalize=True)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-    with open(args.out, "w") as f:
-        json.dump({"alpha": args.alpha, "hist": h.tolist()}, f)
-    print("Saved", args.out)
+from src.postproc import enhance_contrast_pointwise, hist_256  # noqa: E402
 
-if __name__ == "__main__":
+LOGGER = logging.getLogger("make_reference_hist")
+
+
+def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+
+    parser = argparse.ArgumentParser(
+        description="Create the reference histogram from a well-focused particle crop",
+    )
+    parser.add_argument("--crop", required=True, help="Path to an optimal particle crop (grayscale or BGR)")
+    parser.add_argument(
+        "--out",
+        default="reference_hist.json",
+        help="Output JSON path (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=1.2,
+        help="Contrast alpha for point-wise enhancement (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity",
+    )
+    return parser.parse_args(argv)
+
+
+def setup_logging(level: str) -> None:
+    """Configure logging for the script."""
+
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+
+def main(argv: Optional[Iterable[str]] = None) -> None:
+    """CLI entry point."""
+
+    args = parse_args(argv)
+    setup_logging(args.log_level)
+
+    crop_path = Path(args.crop)
+    if not crop_path.exists():
+        raise FileNotFoundError(f"Crop image not found: {crop_path}")
+
+    image = cv.imread(str(crop_path), cv.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ValueError(f"Unable to read crop image: {crop_path}")
+
+    LOGGER.info("Loaded crop %s with shape %s", crop_path, image.shape)
+    image_enhanced = enhance_contrast_pointwise(image, alpha=args.alpha)
+    histogram = hist_256(image_enhanced, normalize=True)
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as handle:
+        json.dump({"alpha": args.alpha, "hist": histogram.tolist()}, handle, indent=2)
+    LOGGER.info("Saved reference histogram to %s", out_path)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
+
